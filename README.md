@@ -13,25 +13,30 @@
 ## 智能Token管理系统
 
 ### 🔄 Token轮询与负载均衡
+
 - 多token轮流使用，自动故障转移
 - 支持大规模token池（支持数百个token）
 
 ### 🛡️ 智能失效检测与自愈
+
 - **自动失效检测**: 三次失败后自动禁用失效token
 - **连续失效自动刷新**: 当连续两个token失效时，自动触发强制刷新（仅在token池数量>2时生效）
 - **智能重试机制**: 失效token会被跳过，确保服务连续性
 
 ### 📈 Token池管理
+
 - 完整的管理API查看状态、重置token等
 - 实时监控token使用情况和失效统计
 - 支持手动重置和重新加载
 
 ### 🔄 Token自动更新
+
 - 定期从账户文件自动生成新的token池
 - **原子性更新**: 零停机时间，更新过程中服务保持可用
 - **智能触发**: 支持定时更新和连续失效触发的强制更新
 
 ### 🌐 网络适应性
+
 - 支持HTTP/HTTPS代理配置，适应不同网络环境
 - 🚀 **高性能**: 异步处理架构，支持高并发请求
 - 🐳 **容器化**: 支持 Docker 部署
@@ -58,6 +63,7 @@ cp .env.example .env
 有两种方式管理Token：
 
 **方式一：手动管理（传统方式）**
+
 ```bash
 # 复制token示例文件并编辑
 cd data
@@ -66,6 +72,7 @@ cp tokens.example.txt tokens.txt
 ```
 
 **方式二：自动更新（推荐）**
+
 ```bash
 # 准备账户文件
 echo '{"email": "your-email@example.com", "k2_password": "your-password"}' > accounts.txt
@@ -148,41 +155,49 @@ curl http://localhost:8001/v1/models \
 ### Token管理接口
 
 查看token池状态：
+
 ```bash
 curl http://localhost:8001/admin/tokens/stats
 ```
 
 查看连续失效状态：
+
 ```bash
 curl http://localhost:8001/admin/tokens/consecutive-failures
 ```
 
 重置连续失效计数：
+
 ```bash
 curl -X POST http://localhost:8001/admin/tokens/reset-consecutive
 ```
 
 重置指定token：
+
 ```bash
 curl -X POST http://localhost:8001/admin/tokens/reset/0
 ```
 
 重置所有token：
+
 ```bash
 curl -X POST http://localhost:8001/admin/tokens/reset-all
 ```
 
 重新加载token文件：
+
 ```bash
 curl -X POST http://localhost:8001/admin/tokens/reload
 ```
 
 查看token更新器状态（仅在启用自动更新时可用）：
+
 ```bash
 curl http://localhost:8001/admin/tokens/updater/status
 ```
 
 强制更新tokens（仅在启用自动更新时可用）：
+
 ```bash
 curl -X POST http://localhost:8001/admin/tokens/updater/force-update
 ```
@@ -196,32 +211,42 @@ curl http://localhost:8001/health
 ## 环境变量配置
 
 ### 基础配置
-| 变量名            | 默认值         | 说明                       |
-| ----------------- | -------------- | -------------------------- |
-| `VALID_API_KEY` | 无默认值       | API 访问密钥（必需）        |
-| `K2THINK_API_URL` | https://www.k2think.ai/api/chat/completions | K2Think API端点 |
 
-### Token管理配置  
-| 变量名            | 默认值         | 说明                       |
-| ----------------- | -------------- | -------------------------- |
-| `TOKENS_FILE`   | `tokens.txt`   | Token文件路径              |
-| `MAX_TOKEN_FAILURES` | `3`         | Token最大失败次数          |
+| 变量名              | 默认值                                      | 说明                 |
+| ------------------- | ------------------------------------------- | -------------------- |
+| `VALID_API_KEY`   | 无默认值                                    | API 访问密钥（必需） |
+| `K2THINK_API_URL` | https://www.k2think.ai/api/chat/completions | K2Think API端点      |
+
+### Token管理配置
+
+| 变量名                 | 默认值         | 说明              |
+| ---------------------- | -------------- | ----------------- |
+| `TOKENS_FILE`        | `tokens.txt` | Token文件路径     |
+| `MAX_TOKEN_FAILURES` | `3`          | Token最大失败次数 |
 
 ### Token自动更新配置
-| 变量名            | 默认值         | 说明                       |
-| ----------------- | -------------- | -------------------------- |
-| `ENABLE_TOKEN_AUTO_UPDATE` | `false` | 是否启用token自动更新 |
-| `TOKEN_UPDATE_INTERVAL` | `86400` | token更新间隔（秒），默认24小时 |
-| `ACCOUNTS_FILE` | `accounts.txt` | 账户文件路径 |
-| `GET_TOKENS_SCRIPT` | `get_tokens.py` | token获取脚本路径 |
-| `PROXY_URL` | 空 | HTTP/HTTPS代理地址（用于get_tokens.py） |
+
+| 变量名                       | 默认值            | 说明                                    |
+| ---------------------------- | ----------------- | --------------------------------------- |
+| `ENABLE_TOKEN_AUTO_UPDATE` | `false`         | 是否启用token自动更新                   |
+| `TOKEN_UPDATE_INTERVAL`    | `86400`         | token更新间隔（秒），默认24小时         |
+| `ACCOUNTS_FILE`            | `accounts.txt`  | 账户文件路径                            |
+| `GET_TOKENS_SCRIPT`        | `get_tokens.py` | token获取脚本路径                       |
+| `PROXY_URL`                | 空                | HTTP/HTTPS代理地址（用于get_tokens.py） |
 
 ### 服务器配置
-| 变量名            | 默认值         | 说明                       |
-| ----------------- | -------------- | -------------------------- |
-| `HOST`          | `0.0.0.0`    | 服务监听地址               |
-| `PORT`          | `8001`       | 服务端口                   |
-| `TOOL_SUPPORT`  | `true`       | 是否启用工具调用功能       |
+
+| 变量名   | 默认值      | 说明         |
+| -------- | ----------- | ------------ |
+| `HOST` | `0.0.0.0` | 服务监听地址 |
+| `PORT` | `8001`    | 服务端口     |
+
+### 工具调用配置
+
+| 变量名                    | 默认值   | 说明                             |
+| ------------------------- | -------- | -------------------------------- |
+| `ENABLE_TOOLIFY`        | `true` | 是否启用工具调用功能             |
+| `TOOLIFY_CUSTOM_PROMPT` | `""`   | 自定义工具调用提示词模板（可选） |
 
 详细配置说明请参考 `.env.example` 文件。
 
@@ -234,16 +259,17 @@ curl http://localhost:8001/health
 #### 工作原理
 
 1. **连续失效检测**
+
    - 系统跟踪连续失效的token数量
    - 当连续两个token失效时触发自动刷新
    - 仅在token池数量大于2时启用（避免小规模token池误触发）
-
 2. **智能触发条件**
+
    - 连续失效阈值：2个token
    - 最小token池大小：3个token
    - 自动更新必须启用：`ENABLE_TOKEN_AUTO_UPDATE=true`
-
 3. **自动刷新过程**
+
    - 异步执行，不阻塞当前API请求
    - 使用原子性更新机制
    - 刷新成功后自动重新加载token池
@@ -482,7 +508,7 @@ K2-Think 模型具有以下特点：
 
 - **推理能力**: 模型会先进行思考过程，然后给出答案
 - **响应格式**: 使用 `<think></think>` 和 `<answer></answer>` 标签结构化输出
-- **思考内容控制**: 
+- **思考内容控制**:
   - `MBZUAI-IFM/K2-Think`: 包含完整的思考过程
   - `MBZUAI-IFM/K2-Think-nothink`: 仅输出最终答案
 - **多语言支持**: 支持中文、英文等多种语言
@@ -512,8 +538,11 @@ GET_TOKENS_SCRIPT=get_tokens.py
 PROXY_URL=http://username:password@proxy.example.com:8080
 
 # 功能开关
-TOOL_SUPPORT=true
+ENABLE_TOOLIFY=true
 DEBUG_LOGGING=false
+
+# 工具调用配置（可选）
+# TOOLIFY_CUSTOM_PROMPT="自定义提示词模板"
 ```
 
 ### accounts.txt 文件示例
@@ -531,15 +560,14 @@ DEBUG_LOGGING=false
 
    - **所有token失效**: 访问 `/admin/tokens/stats` 查看token状态，使用 `/admin/tokens/reset-all` 重置所有token
    - **连续失效**: 查看 `/admin/tokens/consecutive-failures` 了解连续失效状态，系统会自动触发刷新
-   - **添加新token**: 
+   - **添加新token**:
      - 手动模式：编辑 `tokens.txt` 文件添加新token，然后访问 `/admin/tokens/reload` 重新加载
      - 自动模式：编辑 `accounts.txt` 添加新账户，然后访问 `/admin/tokens/updater/force-update` 强制更新
    - **查看token状态**: 访问 `/health` 端点查看简要统计，或 `/admin/tokens/stats` 查看详细信息
-   - **自动更新问题**: 
+   - **自动更新问题**:
      - 访问 `/admin/tokens/updater/status` 查看更新器状态和错误信息
      - 检查 `is_updating` 字段确认是否正在更新中
      - 查看 `last_error` 字段了解最近的错误信息
-
 2. **端口冲突**
 
    - 修改 `PORT` 环境变量
@@ -573,16 +601,17 @@ python check_config_simple.py --example
 ### Docker部署注意事项
 
 1. **文件映射**
+
    - `tokens.txt` 通过volume映射到容器内，支持动态更新
    - 如果启用自动更新，`tokens.txt` 不能设置为只读（`:ro`）
    - `accounts.txt` 映射为只读，包含账户信息用于自动更新
    - `.env` 文件包含所有环境变量配置
-
 2. **健康检查**
+
    - Docker容器包含健康检查机制
    - 可通过 `docker ps` 查看健康状态
-
 3. **安全考虑**
+
    - 容器以非root用户运行
    - 敏感文件通过volume挂载而非打包到镜像中
 

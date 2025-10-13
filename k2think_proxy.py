@@ -105,7 +105,8 @@ async def homepage():
         "features": [
             "Token轮询和负载均衡",
             "自动失效检测和重试",
-            "Token池管理"
+            "Token池管理",
+            "OpenAI Function Calling 工具调用"
         ],
         "endpoints": {
             "chat": "/v1/chat/completions",
@@ -135,8 +136,8 @@ async def health_check():
         "status": "healthy",
         "timestamp": int(time.time()),
         "config": {
-            "tool_support": Config.TOOL_SUPPORT,
             "debug_logging": Config.DEBUG_LOGGING,
+            "toolify_enabled": Config.ENABLE_TOOLIFY,
             "note": "思考内容输出现在通过模型名控制"
         },
         "tokens": {
@@ -364,7 +365,6 @@ if __name__ == "__main__":
     log_level = "debug" if Config.DEBUG_LOGGING else "info"
     
     logger.info(f"启动服务器: {Config.HOST}:{Config.PORT}")
-    logger.info(f"工具支持: {Config.TOOL_SUPPORT}")
     logger.info("思考内容输出: 通过模型名控制 (MBZUAI-IFM/K2-Think vs MBZUAI-IFM/K2-Think-nothink)")
     
     uvicorn.run(

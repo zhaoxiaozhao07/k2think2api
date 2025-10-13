@@ -13,21 +13,21 @@ import pytz
 import httpx
 
 from src.constants import (
-    ToolConstants,APIConstants, ResponseConstants, ContentConstants, 
+    APIConstants, ResponseConstants, ContentConstants, 
     NumericConstants, TimeConstants, HeaderConstants
 )
 from src.exceptions import UpstreamError, TimeoutError as ProxyTimeoutError
-from src.tool_handler import ToolHandler
 from src.utils import safe_log_error, safe_log_info, safe_log_warning
+from src.toolify_config import get_toolify
+from src.toolify.detector import StreamingFunctionCallDetector
 
 logger = logging.getLogger(__name__)
 
 class ResponseProcessor:
     """响应处理器"""
     
-    def __init__(self, config, tool_handler: ToolHandler):
+    def __init__(self, config):
         self.config = config
-        self.tool_handler = tool_handler
     
     def extract_answer_content(self, full_content: str, output_thinking: bool = True) -> str:
         """删除第一个<answer>标签和最后一个</answer>标签，保留内容"""
@@ -296,15 +296,15 @@ class ResponseProcessor:
             safe_log_error(logger, "处理非流式响应错误", e)
             raise
     
-    async def process_stream_response_with_tools(
+    async def process_stream_response(
         self, 
         k2think_payload: dict, 
-        headers: dict, 
-        has_tools: bool = False,
+        headers: dict,
         output_thinking: bool = None,
-        original_model: str = None
+        original_model: str = None,
+        enable_toolify: bool = False
     ) -> AsyncGenerator[str, None]:
-        """处理流式响应 - 支持工具调用，优化性能"""
+        """处理流式响应"""
         try:
             # 发送开始chunk
             start_chunk = self._create_chunk_data(
@@ -328,47 +328,34 @@ class ResponseProcessor:
                 yield ResponseConstants.STREAM_DONE_MARKER
                 return
             
-            # 处理工具调用的流式响应
-            finish_reason = ResponseConstants.FINISH_REASON_STOP
-            if has_tools:
-                tool_calls = self.tool_handler.extract_tool_invocations(full_content)
-                if tool_calls:
-                    # 发送工具调用
-                    for i, tc in enumerate(tool_calls):
-                        tool_call_delta = {
-                            "index": i,
-                            "id": tc.get("id"),
-                            "type": tc.get("type", ToolConstants.FUNCTION_TYPE),
-                            "function": tc.get("function", {}),
-                        }
-                        
-                        tool_chunk = self._create_chunk_data(
-                            delta={"tool_calls": [tool_call_delta]},
-                            finish_reason=None,
-                            model=original_model
-                        )
-                        yield f"{ResponseConstants.STREAM_DATA_PREFIX}{json.dumps(tool_chunk)}\n\n"
-                    
-                    finish_reason = ResponseConstants.FINISH_REASON_TOOL_CALLS
-                else:
-                    # 发送常规内容
-                    trimmed_content = self.tool_handler.remove_tool_json_content(full_content)
-                    if trimmed_content:
-                        async for chunk in self._stream_content(trimmed_content, original_model):
-                            yield chunk
+            # 检测工具调用（如果启用）
+            toolify_detector = None
+            if enable_toolify:
+                toolify = get_toolify()
+                if toolify:
+                    toolify_detector = StreamingFunctionCallDetector(toolify.trigger_signal)
+                    safe_log_info(logger, "[TOOLIFY] 流式工具调用检测器已初始化")
+            
+            # 发送内容（支持工具调用检测）
+            if toolify_detector:
+                # 使用工具调用检测器处理内容
+                async for chunk in self._stream_content_with_tool_detection(
+                    full_content, original_model, toolify_detector, k2think_payload.get("chat_id", "")
+                ):
+                    yield chunk
             else:
-                # 无工具 - 发送常规内容
+                # 正常流式发送
                 async for chunk in self._stream_content(full_content, original_model):
                     yield chunk
-            
-            # 发送结束chunk
-            end_chunk = self._create_chunk_data(
-                delta={},
-                finish_reason=finish_reason,
-                model=original_model
-            )
-            yield f"{ResponseConstants.STREAM_DATA_PREFIX}{json.dumps(end_chunk)}\n\n"
-            yield ResponseConstants.STREAM_DONE_MARKER
+                
+                # 发送结束chunk
+                end_chunk = self._create_chunk_data(
+                    delta={},
+                    finish_reason=ResponseConstants.FINISH_REASON_STOP,
+                    model=original_model
+                )
+                yield f"{ResponseConstants.STREAM_DATA_PREFIX}{json.dumps(end_chunk)}\n\n"
+                yield ResponseConstants.STREAM_DONE_MARKER
             
         except Exception as e:
             safe_log_error(logger, "流式响应处理错误", e)
@@ -420,6 +407,66 @@ class ResponseProcessor:
             # 添加延迟模拟真实流式效果
             await asyncio.sleep(self.config.STREAM_DELAY)
     
+    async def _stream_content_with_tool_detection(
+        self, 
+        content: str, 
+        model: str, 
+        detector: StreamingFunctionCallDetector,
+        chat_id: str
+    ) -> AsyncGenerator[str, None]:
+        """流式发送内容并检测工具调用"""
+        chunk_size = self.calculate_dynamic_chunk_size(len(content))
+        
+        for i in range(0, len(content), chunk_size):
+            chunk_content = content[i:i + chunk_size]
+            
+            # 使用检测器处理chunk
+            is_tool_detected, content_to_yield = detector.process_chunk(chunk_content)
+            
+            if is_tool_detected:
+                safe_log_info(logger, "[TOOLIFY] 检测到工具调用触发信号")
+            
+            # 输出处理后的内容
+            if content_to_yield:
+                chunk = self._create_chunk_data(
+                    delta={"content": content_to_yield},
+                    finish_reason=None,
+                    model=model
+                )
+                yield f"{ResponseConstants.STREAM_DATA_PREFIX}{json.dumps(chunk)}\n\n"
+            
+            await asyncio.sleep(self.config.STREAM_DELAY)
+        
+        # 流结束时的最终处理
+        parsed_tools, remaining_content = detector.finalize()
+        
+        # 输出剩余内容
+        if remaining_content:
+            safe_log_info(logger, f"[TOOLIFY] 输出缓冲区剩余内容: {len(remaining_content)}字符")
+            chunk = self._create_chunk_data(
+                delta={"content": remaining_content},
+                finish_reason=None,
+                model=model
+            )
+            yield f"{ResponseConstants.STREAM_DATA_PREFIX}{json.dumps(chunk)}\n\n"
+        
+        # 如果检测到工具调用，输出工具调用结果
+        if parsed_tools:
+            safe_log_info(logger, f"[TOOLIFY] 检测到 {len(parsed_tools)} 个工具调用")
+            from src.toolify_handler import format_toolify_response_for_stream
+            tool_chunks = format_toolify_response_for_stream(parsed_tools, model, chat_id)
+            for chunk in tool_chunks:
+                yield chunk
+        else:
+            # 没有工具调用，正常结束
+            end_chunk = self._create_chunk_data(
+                delta={},
+                finish_reason=ResponseConstants.FINISH_REASON_STOP,
+                model=model
+            )
+            yield f"{ResponseConstants.STREAM_DATA_PREFIX}{json.dumps(end_chunk)}\n\n"
+            yield ResponseConstants.STREAM_DONE_MARKER
+    
     def _create_chunk_data(self, delta: dict, finish_reason: Optional[str], model: str = None) -> dict:
         """创建流式响应chunk数据"""
         return {
@@ -436,21 +483,15 @@ class ResponseProcessor:
     
     def create_completion_response(
         self, 
-        content: Optional[str], 
-        tool_calls: Optional[list] = None,
+        content: Optional[str],
         token_info: Optional[dict] = None,
         model: str = None
     ) -> dict:
         """创建完整的聊天补全响应"""
-        finish_reason = ResponseConstants.FINISH_REASON_TOOL_CALLS if tool_calls else ResponseConstants.FINISH_REASON_STOP
-        
         message = {
             "role": "assistant",
             "content": content,
         }
-        
-        if tool_calls:
-            message["tool_calls"] = tool_calls
         
         return {
             "id": f"chatcmpl-{int(time.time())}",
@@ -460,7 +501,7 @@ class ResponseProcessor:
             "choices": [{
                 "index": 0,
                 "message": message,
-                "finish_reason": finish_reason
+                "finish_reason": ResponseConstants.FINISH_REASON_STOP
             }],
             "usage": token_info or {
                 "prompt_tokens": NumericConstants.DEFAULT_PROMPT_TOKENS,

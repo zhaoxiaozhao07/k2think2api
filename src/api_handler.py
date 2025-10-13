@@ -20,10 +20,10 @@ from src.exceptions import (
     K2ThinkProxyError, UpstreamError
 )
 from src.models import ChatCompletionRequest, ModelsResponse, ModelInfo
-from src.tool_handler import ToolHandler
 from src.response_processor import ResponseProcessor
 from src.token_manager import TokenManager
 from src.utils import safe_log_error, safe_log_info, safe_log_warning
+from src.toolify_handler import should_enable_toolify, prepare_toolify_request
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +32,7 @@ class APIHandler:
     
     def __init__(self, config: Config):
         self.config = config
-        self.tool_handler = ToolHandler(config)
-        self.response_processor = ResponseProcessor(config, self.tool_handler)
+        self.response_processor = ResponseProcessor(config)
         self.token_manager = config.get_token_manager()
     
     def validate_api_key(self, authorization: str) -> bool:
@@ -84,19 +83,20 @@ class APIHandler:
             # 处理消息
             raw_messages = self._process_raw_messages(request.messages)
             
-            # 检查工具是否启用和存在
-            has_tools = self._check_tools_enabled(request)
+            # 检查是否需要启用工具调用
+            request_dict = request.model_dump()
+            enable_toolify = should_enable_toolify(request_dict)
             
-            self._log_request_info(raw_messages, has_tools, request.tools)
+            # 如果启用工具调用，预处理消息并注入提示词
+            if enable_toolify:
+                safe_log_info(logger, "[TOOLIFY] 工具调用功能已启用")
+                raw_messages, _ = prepare_toolify_request(request_dict, raw_messages)
             
-            # 处理工具相关消息
-            processed_messages = self._process_messages_with_tools(
-                raw_messages, request, has_tools
-            )
+            self._log_request_info(raw_messages)
             
             # 构建K2Think请求
             k2think_payload = self._build_k2think_payload(
-                request, processed_messages, actual_model_id
+                request, raw_messages, actual_model_id
             )
             
             # 验证JSON序列化
@@ -105,11 +105,11 @@ class APIHandler:
             # 处理响应（带重试机制）
             if request.stream:
                 return await self._handle_stream_response_with_retry(
-                    request, k2think_payload, has_tools, output_thinking
+                    request, k2think_payload, output_thinking, enable_toolify
                 )
             else:
                 return await self._handle_non_stream_response_with_retry(
-                    request, k2think_payload, has_tools, output_thinking
+                    request, k2think_payload, output_thinking, enable_toolify
                 )
                 
         except K2ThinkProxyError:
@@ -134,33 +134,19 @@ class APIHandler:
             try:
                 raw_messages.append({
                     "role": msg.role, 
-                    "content": msg.content,  # 保持原始格式，稍后再转换
-                    "tool_calls": msg.tool_calls
+                    "content": msg.content  # 保持原始格式，稍后再转换
                 })
             except Exception as e:
                 safe_log_error(logger, f"处理消息时出错, 消息: {msg}", e)
                 # 使用默认值
                 raw_messages.append({
                     "role": msg.role, 
-                    "content": str(msg.content) if msg.content else "", 
-                    "tool_calls": msg.tool_calls
+                    "content": str(msg.content) if msg.content else ""
                 })
         return raw_messages
     
-    def _check_tools_enabled(self, request: ChatCompletionRequest) -> bool:
-        """检查工具是否启用"""
-        return (
-            self.config.TOOL_SUPPORT and 
-            request.tools is not None and 
-            len(request.tools) > 0 and 
-            request.tool_choice != "none"
-        )
-    
-    def _log_request_info(self, raw_messages: List[Dict], has_tools: bool, tools: List):
+    def _log_request_info(self, raw_messages: List[Dict]):
         """记录请求信息"""
-        safe_log_info(logger, LogMessages.TOOL_STATUS.format(
-            has_tools, len(tools) if tools else 0
-        ))
         safe_log_info(logger, LogMessages.MESSAGE_RECEIVED.format(len(raw_messages)))
         
         # 记录原始消息的角色分布
@@ -169,35 +155,6 @@ class APIHandler:
             role = msg.get("role", "unknown")
             role_count[role] = role_count.get(role, 0) + 1
         safe_log_info(logger, LogMessages.ROLE_DISTRIBUTION.format("原始", role_count))
-    
-    def _process_messages_with_tools(
-        self, 
-        raw_messages: List[Dict], 
-        request: ChatCompletionRequest, 
-        has_tools: bool
-    ) -> List[Dict]:
-        """处理工具相关消息"""
-        if has_tools:
-            processed_messages = self.tool_handler.process_messages_with_tools(
-                raw_messages,
-                request.tools,
-                request.tool_choice
-            )
-            safe_log_info(logger, LogMessages.MESSAGE_PROCESSED.format(
-                len(raw_messages), len(processed_messages)
-            ))
-            
-            # 记录处理后消息的角色分布
-            processed_role_count = {}
-            for msg in processed_messages:
-                role = msg.get("role", "unknown")
-                processed_role_count[role] = processed_role_count.get(role, 0) + 1
-            safe_log_info(logger, LogMessages.ROLE_DISTRIBUTION.format("处理后", processed_role_count))
-        else:
-            processed_messages = raw_messages
-            safe_log_info(logger, LogMessages.NO_TOOLS)
-        
-        return processed_messages
     
     def _build_k2think_payload(
         self, 
@@ -219,7 +176,7 @@ class APIHandler:
             except Exception as e:
                 safe_log_error(logger, f"构建K2Think消息时出错, 消息: {msg}", e)
                 # 使用安全的默认值
-                fallback_content = self.tool_handler._content_to_string(msg.get("content", ""))
+                fallback_content = str(msg.get("content", ""))
                 k2think_messages.append({
                     "role": msg.get("role", "user"), 
                     "content": fallback_content
@@ -292,15 +249,14 @@ class APIHandler:
     async def _handle_stream_response(
         self, 
         k2think_payload: Dict, 
-        headers: Dict[str, str], 
-        has_tools: bool,
+        headers: Dict[str, str],
         output_thinking: bool = True,
         original_model: str = None
     ) -> StreamingResponse:
         """处理流式响应"""
         return StreamingResponse(
-            self.response_processor.process_stream_response_with_tools(
-                k2think_payload, headers, has_tools, output_thinking, original_model
+            self.response_processor.process_stream_response(
+                k2think_payload, headers, output_thinking, original_model
             ),
             media_type=HeaderConstants.TEXT_EVENT_STREAM,
             headers={
@@ -313,8 +269,7 @@ class APIHandler:
     async def _handle_non_stream_response(
         self, 
         k2think_payload: Dict, 
-        headers: Dict[str, str], 
-        has_tools: bool,
+        headers: Dict[str, str],
         output_thinking: bool = True,
         original_model: str = None
     ) -> JSONResponse:
@@ -323,26 +278,8 @@ class APIHandler:
             k2think_payload, headers, output_thinking
         )
         
-        # 处理工具调用
-        tool_calls = None
-        message_content = full_content
-        
-        if has_tools:
-            tool_calls = self.tool_handler.extract_tool_invocations(full_content)
-            if tool_calls:
-                # 当存在工具调用时，内容必须为null（OpenAI规范）
-                message_content = None
-                safe_log_info(logger, LogMessages.TOOL_CALLS_EXTRACTED.format(
-                    json.dumps(tool_calls, ensure_ascii=False)
-                ))
-            else:
-                # 从内容中移除工具JSON
-                message_content = self.tool_handler.remove_tool_json_content(full_content)
-                if not message_content:
-                    message_content = full_content  # 保留原内容如果清理后为空
-        
         openai_response = self.response_processor.create_completion_response(
-            message_content, tool_calls, token_info, original_model
+            full_content, token_info, original_model
         )
         
         return JSONResponse(content=openai_response)
@@ -350,9 +287,9 @@ class APIHandler:
     async def _handle_stream_response_with_retry(
         self, 
         request: ChatCompletionRequest,
-        k2think_payload: Dict, 
-        has_tools: bool,
+        k2think_payload: Dict,
         output_thinking: bool = True,
+        enable_toolify: bool = False,
         max_retries: int = 3
     ) -> StreamingResponse:
         """处理流式响应（带重试机制）"""
@@ -389,8 +326,8 @@ class APIHandler:
                 # 创建流式生成器，内部处理token成功/失败标记
                 async def stream_generator():
                     try:
-                        async for chunk in self.response_processor.process_stream_response_with_tools(
-                            k2think_payload, headers, has_tools, output_thinking, request.model
+                        async for chunk in self.response_processor.process_stream_response(
+                            k2think_payload, headers, output_thinking, request.model, enable_toolify
                         ):
                             yield chunk
                         # 流式响应成功完成，标记token成功
@@ -454,9 +391,9 @@ class APIHandler:
     async def _handle_non_stream_response_with_retry(
         self, 
         request: ChatCompletionRequest,
-        k2think_payload: Dict, 
-        has_tools: bool,
+        k2think_payload: Dict,
         output_thinking: bool = True,
+        enable_toolify: bool = False,
         max_retries: int = 3
     ) -> JSONResponse:
         """处理非流式响应（带重试机制）"""
@@ -498,27 +435,34 @@ class APIHandler:
                 # 标记token成功
                 self.token_manager.mark_token_success(token)
                 
-                # 处理工具调用
-                tool_calls = None
-                message_content = full_content
+                # 检查是否有工具调用
+                tool_response = None
+                if enable_toolify:
+                    from src.toolify_handler import parse_toolify_response
+                    tool_response = parse_toolify_response(full_content, request.model)
                 
-                if has_tools:
-                    tool_calls = self.tool_handler.extract_tool_invocations(full_content)
-                    if tool_calls:
-                        # 当存在工具调用时，内容必须为null（OpenAI规范）
-                        message_content = None
-                        safe_log_info(logger, LogMessages.TOOL_CALLS_EXTRACTED.format(
-                            json.dumps(tool_calls, ensure_ascii=False)
-                        ))
-                    else:
-                        # 从内容中移除工具JSON
-                        message_content = self.tool_handler.remove_tool_json_content(full_content)
-                        if not message_content:
-                            message_content = full_content  # 保留原内容如果清理后为空
-                
-                openai_response = self.response_processor.create_completion_response(
-                    message_content, tool_calls, token_info, request.model
-                )
+                if tool_response:
+                    # 返回包含tool_calls的响应
+                    openai_response = {
+                        "id": f"chatcmpl-{int(time.time())}",
+                        "object": ResponseConstants.CHAT_COMPLETION_OBJECT,
+                        "created": int(time.time()),
+                        "model": request.model,
+                        "choices": [{
+                            "index": 0,
+                            "message": tool_response,
+                            "finish_reason": "tool_calls"
+                        }],
+                        "usage": token_info or {
+                            "prompt_tokens": 0,
+                            "completion_tokens": 0,
+                            "total_tokens": 0
+                        }
+                    }
+                else:
+                    openai_response = self.response_processor.create_completion_response(
+                        full_content, token_info, request.model
+                    )
                 
                 return JSONResponse(content=openai_response)
                 
@@ -537,7 +481,6 @@ class APIHandler:
                         # 返回友好的刷新提示消息
                         openai_response = self.response_processor.create_completion_response(
                             content="🔄 tokens强制刷新已启动，请稍后再试",
-                            tool_calls=None,
                             token_info={
                                 "prompt_tokens": 0,
                                 "completion_tokens": 10,

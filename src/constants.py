@@ -30,24 +30,11 @@ class ResponseConstants:
     
     # 完成原因
     FINISH_REASON_STOP = "stop"
-    FINISH_REASON_TOOL_CALLS = "tool_calls"
     FINISH_REASON_ERROR = "error"
     
     # 流式响应标记
     STREAM_DONE_MARKER = "data: [DONE]\n\n"
     STREAM_DATA_PREFIX = "data: "
-
-# 工具调用相关常量
-class ToolConstants:
-    FUNCTION_TYPE = "function"
-    TOOL_TYPE = "function"
-    
-    # 工具调用ID前缀
-    CALL_ID_PREFIX = "call_"
-    
-    # 工具提示长度限制
-    MAX_TOOL_PROMPT_LENGTH = 1000
-    TOOL_PROMPT_TRUNCATE_SUFFIX = "..."
 
 # 内容处理相关常量
 class ContentConstants:
@@ -85,22 +72,14 @@ class ErrorMessages:
 
 # 日志消息常量
 class LogMessages:
-    TOOL_STATUS = "🔧 工具调用状态: has_tools={}, tools_count={}"
     MESSAGE_RECEIVED = "📥 接收到的原始消息数: {}"
     ROLE_DISTRIBUTION = "📊 {}消息角色分布: {}"
-    MESSAGE_PROCESSED = "🔄 消息处理完成，原始消息数: {}, 处理后消息数: {}"
-    NO_TOOLS = "⏭️  无工具调用，直接使用原始消息"
     JSON_VALIDATION_SUCCESS = "✅ K2Think请求体JSON序列化验证通过"
     JSON_VALIDATION_FAILED = "❌ K2Think请求体JSON序列化失败: {}"
     JSON_FIXED = "🔧 使用default=str修复了序列化问题"
     
     # 动态chunk计算日志
     DYNAMIC_CHUNK_CALC = "动态chunk_size计算: 内容长度={}, 计算值={}, 最终值={}"
-    
-    # 工具相关日志
-    TOOL_PROMPT_TOO_LONG = "工具提示过长 ({} 字符)，将截断"
-    SYSTEM_MESSAGE_TOO_LONG = "系统消息过长 ({} 字符)，使用简化版本"
-    TOOL_CALLS_EXTRACTED = "提取到工具调用: {}"
 
 # HTTP头常量
 class HeaderConstants:

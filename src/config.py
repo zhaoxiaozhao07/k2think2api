@@ -40,7 +40,6 @@ class Config:
     PORT: int = int(os.getenv("PORT", "8001"))
     
     # 功能开关
-    TOOL_SUPPORT: bool = os.getenv("TOOL_SUPPORT", "true").lower() == "true"
     DEBUG_LOGGING: bool = os.getenv("DEBUG_LOGGING", "false").lower() == "true"
     ENABLE_ACCESS_LOG: bool = os.getenv("ENABLE_ACCESS_LOG", "true").lower() == "true"
     
@@ -61,6 +60,10 @@ class Config:
         if os.getenv("CORS_ORIGINS", "*") != "*" 
         else ["*"]
     )
+    
+    # 工具调用配置
+    ENABLE_TOOLIFY: bool = os.getenv("ENABLE_TOOLIFY", "true").lower() == "true"
+    TOOLIFY_CUSTOM_PROMPT: str = os.getenv("TOOLIFY_CUSTOM_PROMPT", "")
     
     @classmethod
     def validate(cls) -> None:
