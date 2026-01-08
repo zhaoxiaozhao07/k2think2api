@@ -18,18 +18,16 @@ class Config:
     
     # API认证配置
     VALID_API_KEY: str = os.getenv("VALID_API_KEY", "")
-    # 移除硬编码的K2THINK_TOKEN，使用token管理器
     K2THINK_API_URL: str = os.getenv("K2THINK_API_URL", "https://www.k2think.ai/api/chat/completions")
     
     # Token管理配置
-    TOKENS_FILE: str = os.getenv("TOKENS_FILE", "tokens.txt")
     MAX_TOKEN_FAILURES: int = int(os.getenv("MAX_TOKEN_FAILURES", "3"))
     
     # Token自动更新配置
-    ENABLE_TOKEN_AUTO_UPDATE: bool = os.getenv("ENABLE_TOKEN_AUTO_UPDATE", "false").lower() == "true"
+    ENABLE_TOKEN_AUTO_UPDATE: bool = os.getenv("ENABLE_TOKEN_AUTO_UPDATE", "true").lower() == "true"
     TOKEN_UPDATE_INTERVAL: int = int(os.getenv("TOKEN_UPDATE_INTERVAL", "86400"))  # 默认24小时
     ACCOUNTS_FILE: str = os.getenv("ACCOUNTS_FILE", "accounts.txt")
-    GET_TOKENS_SCRIPT: str = os.getenv("GET_TOKENS_SCRIPT", "get_tokens.py")
+    TOKEN_MAX_WORKERS: int = int(os.getenv("TOKEN_MAX_WORKERS", "4"))  # 并发获取token的线程数
     
     # Token管理器实例（延迟初始化）
     _token_manager: TokenManager = None
@@ -71,26 +69,13 @@ class Config:
         if not cls.VALID_API_KEY:
             raise ValueError("错误：VALID_API_KEY 环境变量未设置。请在 .env 文件中提供一个安全的API密钥。")
         
-        # 验证token文件是否存在
-        if not os.path.exists(cls.TOKENS_FILE):
-            if cls.ENABLE_TOKEN_AUTO_UPDATE:
-                # 如果启用了自动更新，检查必要的文件是否存在
-                if not os.path.exists(cls.ACCOUNTS_FILE):
-                    raise ValueError(f"错误：启用了token自动更新，但账户文件 {cls.ACCOUNTS_FILE} 不存在。请创建账户文件或禁用自动更新。")
-                if not os.path.exists(cls.GET_TOKENS_SCRIPT):
-                    raise ValueError(f"错误：启用了token自动更新，但脚本文件 {cls.GET_TOKENS_SCRIPT} 不存在。")
-                
-                # 创建一个空的token文件，让token更新服务来处理
-                print(f"Token文件 {cls.TOKENS_FILE} 不存在，已启用自动更新。创建空token文件，等待更新服务生成...")
-                try:
-                    with open(cls.TOKENS_FILE, 'w', encoding='utf-8') as f:
-                        f.write("# Token文件将由自动更新服务生成\n")
-                    print("空token文件已创建，服务启动后将自动更新token池。")
-                except Exception as e:
-                    raise ValueError(f"错误：无法创建token文件 {cls.TOKENS_FILE}: {e}")
-            else:
-                # 如果没有启用自动更新，则要求手动提供token文件
-                raise ValueError(f"错误：Token文件 {cls.TOKENS_FILE} 不存在。请手动创建token文件或启用自动更新功能（设置 ENABLE_TOKEN_AUTO_UPDATE=true）。")
+        # 检查账户文件是否存在（启动时刷新需要）
+        if cls.ENABLE_TOKEN_AUTO_UPDATE:
+            if not os.path.exists(cls.ACCOUNTS_FILE):
+                raise ValueError(f"错误：账户文件 {cls.ACCOUNTS_FILE} 不存在。请创建账户文件。")
+            print(f"✓ 账户文件已找到: {cls.ACCOUNTS_FILE}")
+        else:
+            raise ValueError("错误：必须启用 ENABLE_TOKEN_AUTO_UPDATE=true，因为现在完全依赖内存中的tokens。")
         
         # 验证数值范围
         if cls.PORT < 1 or cls.PORT > 65535:
@@ -135,14 +120,11 @@ class Config:
     def get_token_manager(cls) -> TokenManager:
         """获取token管理器实例（单例模式）"""
         if cls._token_manager is None:
+            # 创建TokenManager，允许空启动（等待刷新）
             cls._token_manager = TokenManager(
-                tokens_file=cls.TOKENS_FILE,
                 max_failures=cls.MAX_TOKEN_FAILURES,
-                allow_empty=cls.ENABLE_TOKEN_AUTO_UPDATE  # 自动更新模式下允许空文件
+                allow_empty=True  # 启动时允许空，等待刷新
             )
-            # 如果启用了自动更新，设置强制刷新回调
-            if cls.ENABLE_TOKEN_AUTO_UPDATE:
-                cls._setup_force_refresh_callback()
         return cls._token_manager
     
     @classmethod
@@ -151,14 +133,45 @@ class Config:
         if cls._token_updater is None:
             cls._token_updater = TokenUpdater(
                 update_interval=cls.TOKEN_UPDATE_INTERVAL,
-                get_tokens_script=cls.GET_TOKENS_SCRIPT,
                 accounts_file=cls.ACCOUNTS_FILE,
-                tokens_file=cls.TOKENS_FILE
+                max_workers=cls.TOKEN_MAX_WORKERS
             )
-            # 如果token_manager已存在且启用了自动更新，建立连接
-            if cls._token_manager is not None and cls.ENABLE_TOKEN_AUTO_UPDATE:
-                cls._setup_force_refresh_callback()
         return cls._token_updater
+    
+    @classmethod
+    def initialize_tokens(cls) -> bool:
+        """
+        初始化tokens - 启动时执行
+        
+        Returns:
+            成功返回True，否则返回False
+        """
+        logger = logging.getLogger(__name__)
+        
+        logger.info("🚀 启动时执行token刷新...")
+        
+        # 获取更新器和管理器
+        token_updater = cls.get_token_updater()
+        token_manager = cls.get_token_manager()
+        
+        # 关联更新器和管理器
+        token_updater.set_token_manager(token_manager)
+        
+        # 设置内存刷新回调
+        token_manager.set_memory_refresh_callback(token_updater.refresh_tokens)
+        
+        # 执行初始刷新
+        success = token_updater.initial_refresh()
+        
+        if success:
+            logger.info(f"✅ Token初始化成功，共 {len(token_manager.get_tokens_list())} 个token可用")
+        else:
+            logger.error("❌ Token初始化失败，请检查accounts.txt文件")
+        
+        # 设置强制刷新回调
+        cls._setup_force_refresh_callback()
+        
+        return success
     
     @classmethod
     def reload_tokens(cls) -> None:
@@ -169,25 +182,21 @@ class Config:
     @classmethod
     def _setup_force_refresh_callback(cls) -> None:
         """设置强制刷新回调函数"""
-        if cls._token_manager is not None and cls._token_updater is None:
-            # 确保token_updater已被初始化
-            cls.get_token_updater()
+        if cls._token_manager is None or cls._token_updater is None:
+            return
         
-        if cls._token_manager is not None and cls._token_updater is not None:
-            # 设置强制刷新回调
-            def force_refresh_callback():
-                try:
-                    logging.getLogger(__name__).info("🔄 检测到token问题，启动自动刷新")
-                    success = cls._token_updater.force_update()
-                    if success:
-                        # 强制刷新成功后，重新加载token管理器
-                        cls._token_manager.reload_tokens()
-                        cls._token_manager.reset_consecutive_failures()
-                        logging.getLogger(__name__).info("✅ 自动刷新完成，tokens.txt已更新，token池已重新加载")
-                    else:
-                        logging.getLogger(__name__).error("❌ 自动刷新失败，请检查accounts.txt文件或手动更新token")
-                except Exception as e:
-                    logging.getLogger(__name__).error(f"❌ 自动刷新回调执行失败: {e}")
-            
-            cls._token_manager.set_force_refresh_callback(force_refresh_callback)
-            logging.getLogger(__name__).info("已设置连续失效自动强制刷新机制")
+        def force_refresh_callback():
+            try:
+                logger = logging.getLogger(__name__)
+                logger.info("🔄 检测到token问题，启动自动刷新")
+                success = cls._token_updater.force_update()
+                if success:
+                    cls._token_manager.reset_consecutive_failures()
+                    logger.info("✅ 自动刷新完成，token池已更新")
+                else:
+                    logger.error("❌ 自动刷新失败，请检查accounts.txt文件")
+            except Exception as e:
+                logging.getLogger(__name__).error(f"❌ 自动刷新回调执行失败: {e}")
+        
+        cls._token_manager.set_force_refresh_callback(force_refresh_callback)
+        logging.getLogger(__name__).info("已设置连续失效自动强制刷新机制")

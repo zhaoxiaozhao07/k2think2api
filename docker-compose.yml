@@ -7,11 +7,8 @@ services:
     ports:
       - "${HOST_PORT:-8001}:8001"
     volumes:
-      # 使用目录挂载而非文件挂载，避免文件锁定问题
+      # 挂载数据目录（包含accounts.txt）
       - ./data:/app/data
-      # 或者使用命名卷（推荐用于生产环境）
-      # - k2think_data:/app/data
-    # 直接以root用户运行，简化权限管理
     env_file:
       - .env
     environment:
@@ -20,19 +17,12 @@ services:
       - PYTHONLEGACYWINDOWSSTDIO=0
       - LC_ALL=C.UTF-8
       - LANG=C.UTF-8
-      # 更新配置文件路径指向data目录
-      - TOKENS_FILE=/app/data/tokens.txt
+      # Token自动更新配置（启动即刷新，纯内存模式）
+      - ENABLE_TOKEN_AUTO_UPDATE=true
+      # accounts.txt路径（必需）
       - ACCOUNTS_FILE=/app/data/accounts.txt
+      # 更新间隔（秒），默认24小时
+      - TOKEN_UPDATE_INTERVAL=86400
+      # 并发获取token的线程数
+      - TOKEN_MAX_WORKERS=2
     restart: unless-stopped
-    # 健康检查
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-
-# 可选：使用命名卷（推荐用于生产环境）
-# volumes:
-#   k2think_data:
-#     driver: local

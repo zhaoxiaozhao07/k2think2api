@@ -54,15 +54,22 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("K2Think API Proxy 启动中...")
     
-    # 如果启用了token自动更新，启动更新服务
+    # 启动时初始化tokens（从accounts.txt获取最新tokens）
     if Config.ENABLE_TOKEN_AUTO_UPDATE:
-        token_updater = Config.get_token_updater()
-        if token_updater.start():
-            logger.info(f"Token自动更新服务已启动 - 更新间隔: {Config.TOKEN_UPDATE_INTERVAL}秒")
+        logger.info("🚀 正在从账户获取最新tokens...")
+        if Config.initialize_tokens():
+            logger.info("✅ Tokens初始化成功")
+            
+            # 启动定期更新服务
+            token_updater = Config.get_token_updater()
+            if token_updater.start():
+                logger.info(f"✅ Token自动更新服务已启动 - 更新间隔: {Config.TOKEN_UPDATE_INTERVAL}秒")
+            else:
+                logger.warning("Token自动更新服务启动失败，但初始tokens已就绪")
         else:
-            logger.error("Token自动更新服务启动失败")
+            logger.error("❌ Token初始化失败，服务可能无法正常工作")
     else:
-        logger.info("Token自动更新服务未启用")
+        logger.info("Token自动更新服务未启用，使用文件中的tokens")
     
     yield
     
@@ -72,6 +79,7 @@ async def lifespan(app: FastAPI):
         logger.info("Token自动更新服务已停止")
     
     logger.info("K2Think API Proxy 关闭中...")
+
 
 # 创建FastAPI应用
 app = FastAPI(
@@ -101,11 +109,12 @@ async def homepage():
         "message": "K2Think API Proxy is running",
         "service": "K2Think API Gateway", 
         "model": APIConstants.MODEL_ID,
-        "version": "2.1.0",
+        "version": "2.2.0",
         "features": [
             "Token轮询和负载均衡",
             "自动失效检测和重试",
             "Token池管理",
+            "启动即刷新（内存优先）",
             "OpenAI Function Calling 工具调用"
         ],
         "endpoints": {
@@ -120,8 +129,7 @@ async def homepage():
                 "consecutive_failures": "/admin/tokens/consecutive-failures",
                 "reset_consecutive": "/admin/tokens/reset-consecutive",
                 "updater_status": "/admin/tokens/updater/status",
-                "force_update": "/admin/tokens/updater/force-update",
-                "cleanup_temp_files": "/admin/tokens/updater/cleanup-temp"
+                "force_update": "/admin/tokens/updater/force-update"
             }
         }
     })
@@ -313,29 +321,6 @@ async def force_update_tokens():
                 "message": "Token强制更新失败"
             }
         )
-
-@app.post("/admin/tokens/updater/cleanup-temp")
-async def cleanup_temp_files():
-    """清理临时文件"""
-    if not Config.ENABLE_TOKEN_AUTO_UPDATE:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "status": "error",
-                "message": "Token自动更新未启用"
-            }
-        )
-    
-    token_updater = Config.get_token_updater()
-    cleaned_count = token_updater.cleanup_all_temp_files()
-    
-    return JSONResponse(content={
-        "status": "success",
-        "message": f"临时文件清理完成，共清理 {cleaned_count} 个文件",
-        "data": {
-            "cleaned_files": cleaned_count
-        }
-    })
 
 @app.exception_handler(K2ThinkProxyError)
 async def proxy_exception_handler(request: Request, exc: K2ThinkProxyError):

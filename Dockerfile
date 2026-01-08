@@ -19,15 +19,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制应用代码
 COPY k2think_proxy.py .
-COPY get_tokens.py .
 COPY src/ ./src/
 
-# 创建数据目录和默认文件
+# 创建数据目录和默认accounts文件
 RUN mkdir -p /app/data && \
-    touch /app/data/tokens.txt && \
-    echo "# Token文件将由自动更新服务生成" > /app/data/tokens.txt && \
     touch /app/data/accounts.txt && \
-    echo "# 请通过volume挂载实际的accounts.txt文件" > /app/data/accounts.txt
+    echo '# 请通过volume挂载实际的accounts.txt文件' > /app/data/accounts.txt && \
+    echo '# 格式：每行一个JSON对象，例如：' >> /app/data/accounts.txt && \
+    echo '# {"email": "user@example.com", "k2_password": "password"}' >> /app/data/accounts.txt
 
 # 创建简单的启动脚本
 RUN echo '#!/bin/bash\n\
@@ -40,8 +39,8 @@ exec "$@"' > /app/entrypoint.sh && \
 # 暴露端口
 EXPOSE 8001
 
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+# 健康检查 - 增加启动延迟以等待token刷新完成
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
   CMD curl -f http://localhost:8001/health || exit 1
 
 # 设置entrypoint和默认命令
